@@ -1,4 +1,4 @@
-# M-Automation Telegram Store Bot
+# M-Automation Bot
 
 Clean Telegram store bot for digital stock sales and assisted seller delivery developed by **M-Automation**.
 
