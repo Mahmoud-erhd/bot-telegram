@@ -1,0 +1,19 @@
+[Unit]
+Description=AI Studio Store Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=botuser
+WorkingDirectory=/opt/ai-studio-store
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/ai-studio-store/.env
+ExecStart=/usr/bin/node bin/minof-ai-studio-bot.js
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

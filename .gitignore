@@ -1,0 +1,11 @@
+.env
+PRODUCTION_SECRETS_BACKUP.txt
+runtime/
+node_modules/
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.zip
+*.backup
+

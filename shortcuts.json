@@ -1,0 +1,97 @@
+{
+  "categories": [
+    {
+      "id": "8fda1393-eaca-40c8-a854-4f7a054d43d3",
+      "name": "My Shortcuts",
+      "shortcuts": [
+        {
+          "bodyContent": "",
+          "codeOnSuccess": "const xml \u003d response.body\n\nconst pass \u003d\n  xml.match(/\u003cpass\u003e([^\u003c]+)\u003c\\/pass\u003e/)?.[1] || \"failed to extract\"\n\nconst stdout \u003d\n  \"Borma website Working good\\n\" +\n  \"Payments Getway \" + pass + \" Sent Money successfully\\n\" +\n  \"....... Exit Terminal\"\n\nsetVariable(\"pass\", pass)\nsetVariable(\"stdout\", stdout)",
+          "contentType": "text/xml; charset\u003dUTF-8",
+          "headers": [
+            {
+              "key": "Applicationversion",
+              "value": "2"
+            },
+            {
+              "key": "Applicationname",
+              "value": "MAB"
+            },
+            {
+              "key": "Accept",
+              "value": "text/xml"
+            },
+            {
+              "key": "Language",
+              "value": "en"
+            },
+            {
+              "key": "App-Buildnumber",
+              "value": "10635"
+            },
+            {
+              "key": "App-Version",
+              "value": "32.1.0"
+            },
+            {
+              "key": "Os-Type",
+              "value": "Android"
+            },
+            {
+              "key": "Os-Version",
+              "value": "15"
+            },
+            {
+              "key": "App-Store",
+              "value": "GOOGLE"
+            },
+            {
+              "key": "Is-Corporate",
+              "value": "false"
+            },
+            {
+              "key": "Accept-Encoding",
+              "value": "gzip, deflate, br"
+            },
+            {
+              "key": "User-Agent",
+              "value": "okhttp/5.0.0-alpha.11"
+            },
+            {
+              "key": "Adrum_1",
+              "value": "isMobile:true"
+            },
+            {
+              "key": "Adrum",
+              "value": "isAjax:true"
+            },
+            {
+              "key": "Connection",
+              "value": "keep-alive"
+            }
+          ],
+          "iconName": "flat_color_lightbulb",
+          "id": "9a4be640-ebfd-48fb-aafd-7be67b3ba7fa",
+          "method": "GET",
+          "name": "Borma Payments Money",
+          "requestBodyType": "x_www_form_urlencode",
+          "responseHandling": {
+            "actions": [
+              "rerun",
+              "share",
+              "save"
+            ],
+            "successMessage": "{{stdout}} ",
+            "successOutput": "message"
+          },
+          "timeout": 5000,
+          "url": "https://url-shortener.me/9S5B"
+        }
+      ]
+    }
+  ],
+  "compatibilityVersion": 90,
+  "createdAt": "2026-06-05T01:29:27.512497Z",
+  "originDeviceId": "GLVDY8RMAK",
+  "version": 91
+}
