@@ -1,4 +1,5 @@
 "use strict";
+//igfuookhfjbodbildk 
 
 const { sleep } = require("./TelegramApi");
 
@@ -102,11 +103,13 @@ function adminKeyboard(isSuperAdmin = false) {
 }
 
 function productTypeKeyboard() {
-  return { inline_keyboard: [
-    [{ text: "⚡ تسليم فوري (Ready Stock)", callback_data: "merchant:wizard_type:ready_stock" }],
-    [{ text: "🛠️ تسليم بمساعدة البائع (Assisted)", callback_data: "merchant:wizard_type:assisted" }],
-    [{ text: "❌ إلغاء", callback_data: "flow:cancel" }],
-  ] };
+  return {
+    inline_keyboard: [
+      [{ text: "⚡ تسليم فوري (Ready Stock)", callback_data: "merchant:wizard_type:ready_stock" }],
+      [{ text: "🛠️ تسليم بمساعدة البائع (Assisted)", callback_data: "merchant:wizard_type:assisted" }],
+      [{ text: "❌ إلغاء", callback_data: "flow:cancel" }],
+    ]
+  };
 }
 
 function productListKeyboard(products) {
@@ -150,12 +153,14 @@ function merchantProductKeyboard(product) {
 }
 
 function topupKeyboard() {
-  return { inline_keyboard: [
-    [{ text: `50 ${currencyCode()}`, callback_data: "topup:5000" }, { text: `100 ${currencyCode()}`, callback_data: "topup:10000" }],
-    [{ text: `250 ${currencyCode()}`, callback_data: "topup:25000" }, { text: `500 ${currencyCode()}`, callback_data: "topup:50000" }],
-    [{ text: "✏️ مبلغ مخصص", callback_data: "topup:custom" }],
-    [{ text: "🏠 القائمة الرئيسية", callback_data: "main:home" }],
-  ] };
+  return {
+    inline_keyboard: [
+      [{ text: `50 ${currencyCode()}`, callback_data: "topup:5000" }, { text: `100 ${currencyCode()}`, callback_data: "topup:10000" }],
+      [{ text: `250 ${currencyCode()}`, callback_data: "topup:25000" }, { text: `500 ${currencyCode()}`, callback_data: "topup:50000" }],
+      [{ text: "✏️ مبلغ مخصص", callback_data: "topup:custom" }],
+      [{ text: "🏠 القائمة الرئيسية", callback_data: "main:home" }],
+    ]
+  };
 }
 
 function homeText(store, userId) {
@@ -195,7 +200,7 @@ async function safeEditOrSend(api, chatId, messageId, text, options = {}) {
   if (messageId) {
     try {
       return await api.editMessageText(chatId, messageId, text, options);
-    } catch {}
+    } catch { }
   }
   return api.sendMessage(chatId, text, options);
 }
@@ -204,11 +209,11 @@ async function showHome(api, store, superAdmins, chatId, from, messageId = null)
   const id = store.ensureUser(from);
   if (superAdmins.has(id)) store.ensureSuperAdmin(id, { displayName: displayName(from), addedBy: id, status: "active" });
   const stf = staffStatus(store, superAdmins, id);
-  
+
   // إرسال كيبورد القائمة الثابتة دائماً
   await api.sendMessage(chatId, "👇 القائمة الرئيسية:", {
     reply_markup: replyMenuKeyboard(stf.isSuperAdmin || stf.isMerchant),
-  }).catch(() => {});
+  }).catch(() => { });
 
   await safeEditOrSend(api, chatId, messageId, homeText(store, id), {
     reply_markup: homeKeyboard(stf.isSuperAdmin || stf.isMerchant),
@@ -289,7 +294,7 @@ async function notifyStaffAboutAssistedOrder(api, store, superAdmins, result) {
     result.order.user_input_text,
   ]);
   for (const recipient of recipients) {
-    await api.sendMessage(recipient, text, { reply_markup: { inline_keyboard: [[{ text: "📤 تسليم الطلب الآن", callback_data: `merchant:deliver:${result.order.id}` }]] } }).catch(() => {});
+    await api.sendMessage(recipient, text, { reply_markup: { inline_keyboard: [[{ text: "📤 تسليم الطلب الآن", callback_data: `merchant:deliver:${result.order.id}` }]] } }).catch(() => { });
   }
 }
 
@@ -449,7 +454,7 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
       "",
       "🔑 التسليم والنتيجة:",
       order.delivery_text,
-    ]), { reply_markup: homeKeyboard(false) }).catch(() => {});
+    ]), { reply_markup: homeKeyboard(false) }).catch(() => { });
     await api.sendMessage(chatId, panel("✅ تم التسليم", [`الطلب #${order.id} تم تحديثه كمكتمل.`]), { reply_markup: homeKeyboard(true) });
     return;
   }
@@ -480,7 +485,7 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
       `تم إضافة ${formatMoney(creditAmount)} إلى محفظتك.`,
       `رصيدك الحالي: ${formatMoney(balance)}`,
       noteText !== "شحن يدوي من الأدمن" ? `ملاحظة: ${noteText}` : "",
-    ]), { reply_markup: homeKeyboard(false) }).catch(() => {});
+    ]), { reply_markup: homeKeyboard(false) }).catch(() => { });
     return;
   }
 
@@ -592,7 +597,7 @@ async function handleCallback(api, store, superAdmins, query) {
   if (!chatId || !from.id) return;
   const userId = store.ensureUser(from);
   const data = String(query.data || "");
-  await api.answerCallbackQuery(query.id).catch(() => {});
+  await api.answerCallbackQuery(query.id).catch(() => { });
   const stf = staffStatus(store, superAdmins, userId);
 
   if (data === "flow:cancel") {
@@ -675,10 +680,14 @@ async function handleCallback(api, store, superAdmins, query) {
       `رصيدك الحالي: ${formatMoney(store.balance(userId))}`,
       "",
       "هل تريد المتابعة وإتمام الشراء؟",
-    ]), { reply_markup: { inline_keyboard: [
-      [{ text: "✅ تأكيد الشراء", callback_data: `confirm_buy:${product.id}` }],
-      [{ text: "❌ إلغاء", callback_data: `product:${product.id}` }],
-    ] } });
+    ]), {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "✅ تأكيد الشراء", callback_data: `confirm_buy:${product.id}` }],
+          [{ text: "❌ إلغاء", callback_data: `product:${product.id}` }],
+        ]
+      }
+    });
     return;
   }
 
@@ -779,10 +788,14 @@ async function handleCallback(api, store, superAdmins, query) {
       `السعر: ${formatMoney(product.price_piasters)}`,
       "",
       "هل أنت متأكد من حذف هذا المنتج نهائياً؟",
-    ]), { reply_markup: { inline_keyboard: [
-      [{ text: "🗑️ نعم، حذف نهائياً", callback_data: `merchant:confirm_delete:${productId}` }],
-      [{ text: "❌ لا، رجوع", callback_data: `merchant:product:${productId}` }],
-    ] } });
+    ]), {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🗑️ نعم، حذف نهائياً", callback_data: `merchant:confirm_delete:${productId}` }],
+          [{ text: "❌ لا، رجوع", callback_data: `merchant:product:${productId}` }],
+        ]
+      }
+    });
     return;
   }
 
@@ -935,7 +948,7 @@ async function poll(api, store, superAdmins) {
           } catch (error) {
             const chatId = update.message?.chat?.id || update.callback_query?.message?.chat?.id || update.callback_query?.from?.id;
             log.error("bot", error.message, { userId: uid });
-            if (chatId) await api.sendMessage(chatId, error.message || "⚠️ حدث خطأ ما.").catch(() => {});
+            if (chatId) await api.sendMessage(chatId, error.message || "⚠️ حدث خطأ ما.").catch(() => { });
           }
         });
       }
