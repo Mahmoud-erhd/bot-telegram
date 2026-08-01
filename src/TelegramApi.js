@@ -25,7 +25,7 @@ async function fetchWithTimeout(url, options, ms) {
 }
 
 function multipartBody(fields = {}, files = {}) {
-  const boundary = `----ai-studio-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const boundary = `----m-automation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const parts = [];
   for (const [name, value] of Object.entries(fields)) {
     if (value == null) continue;

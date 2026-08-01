@@ -12,7 +12,7 @@ function resolveDbPath(filePath = "") {
   return path.isAbsolute(filePath) ? filePath : path.join(PROJECT_ROOT, filePath);
 }
 
-function openStoreDatabase(filePath = process.env.MINOF_AI_STUDIO_DB_PATH) {
+function openStoreDatabase(filePath = (process.env.M_AUTOMATION_DB_PATH || process.env.MINOF_AI_STUDIO_DB_PATH)) {
   const dbPath = resolveDbPath(filePath);
   fs.mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
   const db = new Database(dbPath);

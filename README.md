@@ -1,6 +1,6 @@
-# AI Studio Store Bot
+# M-Automation Telegram Store Bot
 
-Clean Telegram store bot for digital stock sales and assisted seller delivery.
+Clean Telegram store bot for digital stock sales and assisted seller delivery developed by **M-Automation**.
 
 This package is intentionally clean. It does not include production data, private environment files, old runtime files, server credentials, or payment provider credentials.
 
@@ -17,9 +17,9 @@ npm run start
 Required values in `.env`:
 
 ```bash
-MINOF_AI_STUDIO_BOT_TOKEN=your-telegram-bot-token
-MINOF_AI_STUDIO_SUPER_ADMIN_IDS=123456789
-MINOF_AI_STUDIO_DATA_KEY=64-hex-random-value
+M_AUTOMATION_BOT_TOKEN=your-telegram-bot-token
+M_AUTOMATION_SUPER_ADMIN_IDS=123456789
+M_AUTOMATION_DATA_KEY=64-hex-random-value
 ```
 
 Generate the data key:
@@ -34,7 +34,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 - Assisted products where a seller manually delivers after reviewing buyer notes.
 - Admin and merchant panels.
 - Wallet balance and purchase ledger.
-- Optional Cashup top-up, disabled by default.
+- Optional Cashup top-up.
 - Sample data seeding for first-run testing.
 
 For full deployment instructions, read `DEVELOPER_RUNBOOK.md`.
