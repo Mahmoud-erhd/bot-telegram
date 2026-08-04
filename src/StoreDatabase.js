@@ -5,7 +5,10 @@ const path = require("path");
 const Database = require("better-sqlite3");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
-const DEFAULT_DB_PATH = path.join(PROJECT_ROOT, "runtime", "store.db");
+const RAILWAY_VOLUME_PATH = String(process.env.RAILWAY_VOLUME_MOUNT_PATH || "").trim();
+const DEFAULT_DB_PATH = RAILWAY_VOLUME_PATH
+  ? path.join(RAILWAY_VOLUME_PATH, "store.db")
+  : path.join(PROJECT_ROOT, "runtime", "store.db");
 
 function resolveDbPath(filePath = "") {
   if (!filePath) return DEFAULT_DB_PATH;
@@ -137,6 +140,22 @@ function migrate(db) {
       FOREIGN KEY (user_id) REFERENCES users(telegram_id)
     );
 
+    CREATE TABLE IF NOT EXISTS manual_topups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      payment_method TEXT NOT NULL,
+      amount_piasters INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'awaiting_proof',
+      proof_kind TEXT NOT NULL DEFAULT '',
+      proof_file_id TEXT NOT NULL DEFAULT '',
+      submitted_at TEXT,
+      reviewed_by TEXT NOT NULL DEFAULT '',
+      reviewer_note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(telegram_id)
+    );
+
     CREATE TABLE IF NOT EXISTS conversation_state (
       user_id TEXT PRIMARY KEY,
       state TEXT NOT NULL,
@@ -162,6 +181,8 @@ function migrate(db) {
     CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_orders_merchant ON orders(merchant_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_topups_user_status ON topups(user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_manual_topups_user_status ON manual_topups(user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_manual_topups_status ON manual_topups(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_price_overrides_user ON user_price_overrides(user_id);
     CREATE INDEX IF NOT EXISTS idx_price_overrides_product ON user_price_overrides(product_id);

@@ -23,7 +23,6 @@ RUN mkdir -p /data /app/runtime && chmod 700 /data
 
 # Default environment variables
 ENV NODE_ENV=production
-ENV MINOF_AI_STUDIO_DB_PATH=/data/store.db
 
 # Start the Telegram bot
 CMD ["node", "bin/m-automation-bot.js"]

@@ -14,6 +14,21 @@ function idSet(value) {
   return new Set(String(value || "").split(",").map((item) => item.trim()).filter(Boolean));
 }
 
+function bootstrapSuperAdmins(store, configuredIds) {
+  const existingActiveAdmins = store.listSuperAdmins().filter((admin) => admin.status === "active");
+  if (!existingActiveAdmins.length && !configuredIds.size) {
+    throw new Error("M_AUTOMATION_SUPER_ADMIN_IDS is required when the database has no active admin.");
+  }
+  for (const id of configuredIds) {
+    if (!store.getSuperAdmin(id)) {
+      store.ensureSuperAdmin(id, { displayName: `Owner ${id}`, addedBy: id, status: "active" });
+    }
+  }
+  if (!store.listSuperAdmins().some((admin) => admin.status === "active")) {
+    throw new Error("The database has no active admin. Restore an active admin before starting the bot.");
+  }
+}
+
 function main() {
   const token = process.env.M_AUTOMATION_BOT_TOKEN || process.env.MINOF_AI_STUDIO_BOT_TOKEN;
   if (!token) throw new Error("M_AUTOMATION_BOT_TOKEN is required.");
@@ -35,10 +50,7 @@ function main() {
   const cashupClient = new CashupClient();
   const store = new StoreService({ db, secretBox, cashupClient });
 
-  for (const id of superAdmins) {
-    store.ensureSuperAdmin(id, { displayName: `Owner ${id}`, addedBy: id, status: "active" });
-  }
-  store.ensureFirstUserOwner();
+  bootstrapSuperAdmins(store, superAdmins);
 
   const api = new TelegramApi(token);
   poll(api, store, superAdmins);
@@ -46,4 +58,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { main };
+module.exports = { bootstrapSuperAdmins, main };

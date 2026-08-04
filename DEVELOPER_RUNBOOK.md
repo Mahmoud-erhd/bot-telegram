@@ -1,246 +1,73 @@
-# Developer Runbook
+# Production Runbook
 
-This guide explains how to install, configure, run, and maintain the AI Studio Store Bot.
+## Pre-deployment checklist
 
-## 1. Requirements
+1. Create a Telegram bot through BotFather and obtain its token.
+2. Obtain the numeric Telegram ID for at least one trusted owner.
+3. Generate a new 32-byte hex encryption key:
 
-- Linux server or local Linux machine.
-- Node.js 20 or newer.
-- npm.
-- A Telegram bot token from BotFather.
-- The Telegram numeric ID of the owner.
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+   ```
 
-## 2. Install
+4. Set the required Railway variables:
 
-Upload and extract the package:
+   ```dotenv
+   M_AUTOMATION_BOT_TOKEN=123456:token
+   M_AUTOMATION_SUPER_ADMIN_IDS=123456789
+   M_AUTOMATION_DATA_KEY=64-character-hex-key
+   ```
+
+5. Attach one Railway Volume at `/data`. The bot discovers the mounted path automatically through `RAILWAY_VOLUME_MOUNT_PATH`. Do not set `M_AUTOMATION_DB_PATH` in Railway unless it points inside that volume.
+6. Set exactly one running replica. Telegram long polling must not run from multiple replicas with the same bot token.
+
+## Manual payment configuration
+
+Automatic payment providers are disabled by default. For manual top-ups, configure at least one receiver and then enable the feature:
+
+```dotenv
+MANUAL_TOPUPS_ENABLED=true
+MANUAL_WALLET_RECEIVER=wallet-number-or-id
+MANUAL_WALLET_INSTRUCTIONS=Transfer the exact amount, then send the receipt image to this bot.
+MANUAL_BINANCE_RECEIVER=binance-pay-id-or-username
+MANUAL_BINANCE_INSTRUCTIONS=Transfer the exact amount, then send the receipt image to this bot.
+```
+
+Leave a receiver empty to hide that payment option. The bot accepts screenshot images and document receipts only while a receipt is expected.
+
+## Staff administration
+
+Open `⚙️ لوحة الإدارة` as a super admin.
+
+- `إضافة تاجر`: send `telegram_id display name`. A merchant can only manage products and orders belonging to that merchant ID.
+- `إضافة أدمن`: send `telegram_id display name`. An admin has all platform permissions.
+- `إزالة تاجر`: safely deactivates the merchant, pauses active products, and keeps records.
+- `إزالة أدمن`: safely deactivates the admin and their merchant access. The last active admin is protected.
+- `إضافة رصيد`: directly credits a user manually.
+
+For a payment receipt, the admin receives an inline `اعتماد وإضافة الرصيد` action. The action is idempotent; if two admins tap it, the wallet is credited once only.
+
+## Backup and recovery
+
+- Use Railway Volume backups before changes that affect data.
+- For a manual backup, stop the bot first and copy `store.db`, `store.db-wal`, and `store.db-shm` together from the mounted volume.
+- Restore the same encryption key with the database. A database without its original `M_AUTOMATION_DATA_KEY` cannot decrypt stored stock, buyer requirements, or delivery text.
+
+## Release checks
 
 ```bash
-unzip minof-ai-studio-store-clean.zip
-cd minof-ai-studio-store-clean
 npm ci
-```
-
-Create the environment file:
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env`:
-
-```bash
-MINOF_AI_STUDIO_BOT_TOKEN=put-the-new-owner-telegram-bot-token-here
-MINOF_AI_STUDIO_SUPER_ADMIN_IDS=put-owner-telegram-id-here
-MINOF_AI_STUDIO_DB_PATH=runtime/store.db
-MINOF_AI_STUDIO_DATA_KEY=put-random-64-hex-value-here
-STORE_BRAND_NAME=AI Studio bot
-STORE_CURRENCY_CODE=EGP
-STORE_CURRENCY_NAME=Egyptian pound
-TOPUPS_ENABLED=0
-```
-
-Generate a safe data key:
-
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-```
-
-## 3. First Run
-
-Check the source:
-
-```bash
 npm run check
+npm test
+npm audit --omit=dev
 ```
 
-Create sample products and sample stock:
-
-```bash
-npm run seed:sample
-```
-
-Start the bot:
-
-```bash
-npm run start
-```
-
-Open Telegram, start the bot, then use the Admin panel.
-
-## 4. Environment Variables
-
-`MINOF_AI_STUDIO_BOT_TOKEN`
-
-Telegram bot token for this copy only.
-
-`MINOF_AI_STUDIO_SUPER_ADMIN_IDS`
-
-Comma-separated Telegram owner IDs. Example: `123456789,987654321`.
-
-`MINOF_AI_STUDIO_DB_PATH`
-
-SQLite database path. Default: `runtime/store.db`.
-
-`MINOF_AI_STUDIO_DATA_KEY`
-
-Encryption key for delivered stock and assisted order notes. Use a 64-character hex value.
-
-`STORE_BRAND_NAME`
-
-Displayed store name.
-
-`STORE_CURRENCY_CODE`
-
-Currency code displayed inside the bot.
-
-`TOPUPS_ENABLED`
-
-Set to `1` only after Cashup is configured. Keep `0` for manual admin balance.
-
-`CASHUP_BASE_URL`, `CASHUP_API_KEY`, `CASHUP_APP_ID`
-
-Optional Cashup settings. Leave placeholders until the new owner provides their own values.
-
-## 5. Working With Products
-
-From Telegram:
-
-1. Press `Admin`.
-2. Press `New Product`.
-3. Send title, category, description, and price.
-4. Choose product type:
-   - `Ready Stock`: buyer receives one stock line immediately.
-   - `Assisted Delivery`: buyer sends requirements and seller delivers later.
-5. For ready stock, send one item per line.
-
-To add more stock later:
-
-1. `Admin`.
-2. `My Products`.
-3. Open a ready-stock product.
-4. Press `Add Stock`.
-5. Send one item per line.
-
-## 6. Balance Management
-
-If top-up is disabled, the owner adds balance manually:
-
-1. `Admin`.
-2. `Add Balance`.
-3. Send:
-
-```text
-user_id amount note
-```
-
-Example:
-
-```text
-123456789 100 Manual credit
-```
-
-To clear a balance:
-
-1. `Admin`.
-2. `Zero Balance`.
-3. Send the user ID.
-
-## 7. Enable Cashup Later
-
-In `.env`:
-
-```bash
-TOPUPS_ENABLED=1
-CASHUP_ENABLED=true
-CASHUP_BASE_URL=https://cashup.cash/base
-CASHUP_API_KEY=
-CASHUP_APP_ID=
-```
-
-Restart the bot after editing `.env`.
-
-## 8. systemd Service
-
-Example path:
-
-```text
-/opt/ai-studio-store
-```
-
-Copy the example service:
-
-```bash
-sudo cp deploy/systemd/minof-ai-studio-store-bot.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now minof-ai-studio-store-bot
-```
-
-View status:
-
-```bash
-systemctl status minof-ai-studio-store-bot --no-pager
-```
-
-View logs:
-
-```bash
-journalctl -u minof-ai-studio-store-bot -f
-```
-
-Restart:
-
-```bash
-sudo systemctl restart minof-ai-studio-store-bot
-```
-
-## 9. Backup
-
-Stop the bot first:
-
-```bash
-sudo systemctl stop minof-ai-studio-store-bot
-```
-
-Copy database files:
-
-```bash
-mkdir -p backups
-cp runtime/store.db backups/store-$(date +%Y%m%d-%H%M%S).db
-```
-
-Start again:
-
-```bash
-sudo systemctl start minof-ai-studio-store-bot
-```
-
-## 10. Troubleshooting
-
-Bot does not answer:
-
-- Check `MINOF_AI_STUDIO_BOT_TOKEN`.
-- Run `journalctl -u minof-ai-studio-store-bot -n 100 --no-pager`.
-- Make sure only one copy of the same Telegram bot is running.
-
-Admin panel does not appear:
-
-- Check `MINOF_AI_STUDIO_SUPER_ADMIN_IDS`.
-- The value must be numeric Telegram IDs, not usernames.
-- Restart the bot after changing `.env`.
-
-Database does not appear:
-
-- Check write permissions in the project directory.
-- Check `MINOF_AI_STUDIO_DB_PATH`.
-- Run `npm run seed:sample` once for test data.
-
-Cashup top-up fails:
-
-- Keep `TOPUPS_ENABLED=0` until the owner adds real Cashup values.
-- Check `CASHUP_ENABLED=true`.
-- Check `CASHUP_BASE_URL`, `CASHUP_API_KEY`, and `CASHUP_APP_ID`.
-
-Stock delivery fails:
-
-- Confirm `MINOF_AI_STUDIO_DATA_KEY` did not change after stock was added.
-- If the key changed, old encrypted stock cannot be read.
+## Operational troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| Bot does not respond | Verify the token, confirm one replica, and inspect Railway logs. |
+| Admin panel is missing | Confirm the numeric ID is in the database/initial configuration and the account was not deactivated. |
+| Data disappeared after deploy | Attach a `/data` volume and remove any database-path override that writes outside it. |
+| Receipt does not reach admins | Confirm at least one active admin has started the bot and that the buyer sent an image or document after selecting a payment method. |
+| Encrypted stock cannot be delivered | Restore the original `M_AUTOMATION_DATA_KEY`; never rotate it without a controlled data migration. |

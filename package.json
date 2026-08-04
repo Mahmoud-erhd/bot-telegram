@@ -4,9 +4,13 @@
   "private": true,
   "description": "M-Automation Clean Telegram store bot for stock sales and merchant administration.",
   "main": "bin/m-automation-bot.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node bin/m-automation-bot.js",
     "check": "node -e \"['bin/m-automation-bot.js','bin/seed-sample.js','src/CashupClient.js','src/SecretBox.js','src/StoreDatabase.js','src/StoreService.js','src/TelegramApi.js','src/bot.js'].forEach(f=>require('child_process').execSync('node --check '+f))\"",
+    "test": "node --test",
     "seed:sample": "node bin/seed-sample.js"
   },
   "dependencies": {

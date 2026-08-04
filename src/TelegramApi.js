@@ -149,6 +149,22 @@ class TelegramApi {
     });
   }
 
+  sendPhoto(chatId, photo, options = {}) {
+    return this.request("sendPhoto", {
+      chat_id: chatId,
+      photo,
+      ...options,
+    });
+  }
+
+  sendDocument(chatId, document, options = {}) {
+    return this.request("sendDocument", {
+      chat_id: chatId,
+      document,
+      ...options,
+    });
+  }
+
   editMessageText(chatId, messageId, text, options = {}) {
     return this.request("editMessageText", {
       chat_id: chatId,

@@ -3,6 +3,7 @@
 const crypto = require("crypto");
 
 const FULFILLMENT_TYPES = new Set(["ready_stock", "assisted"]);
+const MANUAL_PAYMENT_METHODS = new Set(["wallet", "binance"]);
 const MIN_TOPUP_PIASTERS = 10 * 100;
 const MAX_TOPUP_PIASTERS = 5000 * 100;
 
@@ -97,21 +98,6 @@ class StoreService {
     return value;
   }
 
-  firstUser() {
-    return this.db.prepare("SELECT * FROM users ORDER BY created_at ASC LIMIT 1").get() || null;
-  }
-
-  ensureFirstUserOwner() {
-    const first = this.firstUser();
-    if (!first) return null;
-    const displayName = [first.first_name, first.last_name].filter(Boolean).join(" ") || first.username || "Owner";
-    return this.ensureSuperAdmin(first.telegram_id, {
-      displayName,
-      addedBy: first.telegram_id,
-      status: "active",
-    });
-  }
-
   ensureMerchant(telegramId, options = {}) {
     const id = safeTelegramId(telegramId, "Merchant ID");
     const at = nowIso();
@@ -144,13 +130,10 @@ class StoreService {
   listMerchants() {
     return this.db.prepare(`
       SELECT m.*,
-        COUNT(p.id) AS product_count,
-        COUNT(o.id) AS order_count,
-        COALESCE(SUM(o.total_piasters), 0) AS gross_piasters
+        (SELECT COUNT(*) FROM products p WHERE p.merchant_id = m.telegram_id) AS product_count,
+        (SELECT COUNT(*) FROM orders o WHERE o.merchant_id = m.telegram_id) AS order_count,
+        (SELECT COALESCE(SUM(o.total_piasters), 0) FROM orders o WHERE o.merchant_id = m.telegram_id) AS gross_piasters
       FROM merchants m
-      LEFT JOIN products p ON p.merchant_id = m.telegram_id
-      LEFT JOIN orders o ON o.merchant_id = m.telegram_id
-      GROUP BY m.telegram_id
       ORDER BY m.status ASC, gross_piasters DESC, m.created_at ASC
     `).all();
   }
@@ -189,8 +172,80 @@ class StoreService {
     return this.getSuperAdmin(telegramId)?.status === "active";
   }
 
+  assertSuperAdmin(telegramId) {
+    const id = safeTelegramId(telegramId, "Admin ID");
+    if (!this.isSuperAdmin(id)) throw new Error("Admin permission is required.");
+    return id;
+  }
+
+  assertActiveStaff(telegramId, label = "Staff ID") {
+    const id = safeTelegramId(telegramId, label);
+    if (!this.isSuperAdmin(id) && !this.isActiveMerchant(id)) throw new Error("Staff account is not active.");
+    return id;
+  }
+
+  assertProductManager(telegramId, productId) {
+    const id = this.assertActiveStaff(telegramId, "Merchant ID");
+    const product = this.getProduct(productId);
+    if (!product || (product.merchant_id !== id && !this.isSuperAdmin(id))) throw new Error("Product not found.");
+    return { id, product };
+  }
+
   listSuperAdmins() {
     return this.db.prepare("SELECT * FROM super_admins ORDER BY status ASC, created_at ASC").all();
+  }
+
+  addMerchant(adminId, telegramId, options = {}) {
+    const admin = this.assertSuperAdmin(adminId);
+    const id = safeTelegramId(telegramId, "Merchant ID");
+    if (!this.getUser(id)) this.ensureUser({ id });
+    return this.ensureMerchant(id, {
+      displayName: options.displayName || "",
+      addedBy: admin,
+      status: "active",
+    });
+  }
+
+  addSuperAdmin(adminId, telegramId, options = {}) {
+    const admin = this.assertSuperAdmin(adminId);
+    const id = safeTelegramId(telegramId, "Admin ID");
+    if (!this.getUser(id)) this.ensureUser({ id });
+    return this.ensureSuperAdmin(id, {
+      displayName: options.displayName || "",
+      addedBy: admin,
+      status: "active",
+    });
+  }
+
+  deactivateMerchant(adminId, telegramId) {
+    const admin = this.assertSuperAdmin(adminId);
+    const id = safeTelegramId(telegramId, "Merchant ID");
+    if (this.isSuperAdmin(id)) throw new Error("Remove the admin role before removing this merchant.");
+    const merchant = this.getMerchant(id);
+    if (!merchant || merchant.status !== "active") throw new Error("Active merchant was not found.");
+    const at = nowIso();
+    this.db.transaction(() => {
+      this.db.prepare("UPDATE merchants SET status = 'inactive', updated_at = ? WHERE telegram_id = ?").run(at, id);
+      this.db.prepare("UPDATE products SET status = 'paused', updated_at = ? WHERE merchant_id = ? AND status = 'active'").run(at, id);
+    })();
+    return { removedBy: admin, merchant: this.getMerchant(id) };
+  }
+
+  deactivateSuperAdmin(adminId, telegramId) {
+    const admin = this.assertSuperAdmin(adminId);
+    const id = safeTelegramId(telegramId, "Admin ID");
+    if (id === admin) throw new Error("An admin cannot remove their own role.");
+    const target = this.getSuperAdmin(id);
+    if (!target || target.status !== "active") throw new Error("Active admin was not found.");
+    const activeCount = Number(this.db.prepare("SELECT COUNT(*) AS count FROM super_admins WHERE status = 'active'").get().count || 0);
+    if (activeCount <= 1) throw new Error("The last active admin cannot be removed.");
+    const at = nowIso();
+    this.db.transaction(() => {
+      this.db.prepare("UPDATE super_admins SET status = 'inactive', updated_at = ? WHERE telegram_id = ?").run(at, id);
+      this.db.prepare("UPDATE merchants SET status = 'inactive', updated_at = ? WHERE telegram_id = ?").run(at, id);
+      this.db.prepare("UPDATE products SET status = 'paused', updated_at = ? WHERE merchant_id = ? AND status = 'active'").run(at, id);
+    })();
+    return { removedBy: admin, admin: this.getSuperAdmin(id) };
   }
 
   resolveUserId(input) {
@@ -233,7 +288,7 @@ class StoreService {
   }
 
   adminCreditUser(adminId, userId, amountPiasters, note = "") {
-    const admin = safeTelegramId(adminId, "Admin ID");
+    const admin = this.assertSuperAdmin(adminId);
     const user = safeTelegramId(userId, "User ID");
     const amount = assertPositivePiasters(amountPiasters, "Credit");
     if (!this.getUser(user)) this.ensureUser({ id: user });
@@ -246,7 +301,7 @@ class StoreService {
   }
 
   adminZeroBalance(adminId, userId) {
-    const admin = safeTelegramId(adminId, "Admin ID");
+    const admin = this.assertSuperAdmin(adminId);
     const user = safeTelegramId(userId, "User ID");
     const current = this.balance(user);
     if (current === 0) return 0;
@@ -370,11 +425,97 @@ class StoreService {
     return { ok: true, alreadyCredited: false, topup: this.getTopup(topup.id), balance: this.balance(id), payload: data };
   }
 
+  createManualTopup(userId, paymentMethod, amountPiasters) {
+    const user = safeTelegramId(userId, "User ID");
+    const method = cleanText(paymentMethod, 20).toLowerCase();
+    if (!MANUAL_PAYMENT_METHODS.has(method)) throw new Error("Unsupported manual payment method.");
+    const amount = assertTopupAmount(amountPiasters);
+    if (!this.getUser(user)) this.ensureUser({ id: user });
+    const at = nowIso();
+    const result = this.db.prepare(`
+      INSERT INTO manual_topups (user_id, payment_method, amount_piasters, status, created_at, updated_at)
+      VALUES (?, ?, ?, 'awaiting_proof', ?, ?)
+    `).run(user, method, amount, at, at);
+    return this.getManualTopup(result.lastInsertRowid);
+  }
+
+  getManualTopup(topupId) {
+    return this.db.prepare("SELECT * FROM manual_topups WHERE id = ?").get(Number(topupId)) || null;
+  }
+
+  submitManualTopupProof(userId, topupId, proof = {}) {
+    const user = safeTelegramId(userId, "User ID");
+    const topup = this.getManualTopup(topupId);
+    if (!topup || topup.user_id !== user) throw new Error("Manual top-up request was not found.");
+    if (topup.status !== "awaiting_proof") throw new Error("This manual top-up is no longer awaiting a receipt.");
+    const kind = cleanText(proof.kind, 20).toLowerCase();
+    const fileId = cleanText(proof.fileId, 300);
+    if (!["photo", "document"].includes(kind) || !fileId) throw new Error("Send a valid receipt image or document.");
+    const at = nowIso();
+    this.db.prepare(`
+      UPDATE manual_topups
+      SET status = 'proof_submitted', proof_kind = ?, proof_file_id = ?, submitted_at = ?, updated_at = ?
+      WHERE id = ?
+    `).run(kind, fileId, at, at, topup.id);
+    return this.getManualTopup(topup.id);
+  }
+
+  approveManualTopup(adminId, topupId) {
+    const admin = this.assertSuperAdmin(adminId);
+    const id = Number(topupId);
+    let approved = null;
+    this.db.transaction(() => {
+      const topup = this.getManualTopup(id);
+      if (!topup) throw new Error("Manual top-up request was not found.");
+      if (topup.status === "approved") {
+        approved = { topup, alreadyApproved: true, balance: this.balance(topup.user_id) };
+        return;
+      }
+      if (topup.status !== "proof_submitted") throw new Error("This receipt is not awaiting approval.");
+      const at = nowIso();
+      this.db.prepare(`
+        INSERT OR IGNORE INTO ledger (user_id, type, amount_piasters, reference_type, reference_id, idempotency_key, note, created_at)
+        VALUES (?, 'manual_topup', ?, 'manual_topup', ?, ?, ?, ?)
+      `).run(
+        topup.user_id,
+        topup.amount_piasters,
+        String(topup.id),
+        `manual-topup:${topup.id}`,
+        `Manual ${topup.payment_method} top-up approved`,
+        at
+      );
+      this.db.prepare(`
+        UPDATE manual_topups
+        SET status = 'approved', reviewed_by = ?, reviewer_note = '', updated_at = ?
+        WHERE id = ?
+      `).run(admin, at, topup.id);
+      const fresh = this.getManualTopup(topup.id);
+      approved = { topup: fresh, alreadyApproved: false, balance: this.balance(fresh.user_id) };
+    })();
+    return approved;
+  }
+
+  rejectManualTopup(adminId, topupId, note = "") {
+    const admin = this.assertSuperAdmin(adminId);
+    const topup = this.getManualTopup(topupId);
+    if (!topup) throw new Error("Manual top-up request was not found.");
+    if (topup.status !== "proof_submitted") throw new Error("This receipt is not awaiting approval.");
+    const at = nowIso();
+    this.db.prepare(`
+      UPDATE manual_topups
+      SET status = 'rejected', reviewed_by = ?, reviewer_note = ?, updated_at = ?
+      WHERE id = ?
+    `).run(admin, cleanText(note || "Receipt could not be verified.", 500), at, topup.id);
+    return this.getManualTopup(topup.id);
+  }
+
   createProduct(merchantId, input = {}) {
     const mid = safeTelegramId(merchantId, "Merchant ID");
     if (!this.isActiveMerchant(mid) && !this.isSuperAdmin(mid)) throw new Error("Merchant is not active.");
     const fulfillmentType = cleanText(input.fulfillmentType || input.fulfillment_type, 40);
     if (!FULFILLMENT_TYPES.has(fulfillmentType)) throw new Error("Unsupported fulfillment type.");
+    const status = cleanText(input.status || (fulfillmentType === "ready_stock" ? "draft" : "active"), 20);
+    if (!["active", "paused", "draft"].includes(status)) throw new Error("Invalid product status.");
     const title = cleanText(input.title, 180);
     if (!title) throw new Error("Product title is required.");
     const price = assertPositivePiasters(input.pricePiasters || input.price_piasters, "Product price");
@@ -392,7 +533,7 @@ class StoreService {
       cleanText(input.description || "", 1200),
       price,
       fulfillmentType,
-      input.status || (fulfillmentType === "ready_stock" ? "draft" : "active"),
+      status,
       json(input.deliveryTemplate || {}),
       at,
       at
@@ -449,27 +590,21 @@ class StoreService {
   }
 
   setProductStatus(merchantId, productId, status) {
-    const mid = safeTelegramId(merchantId, "Merchant ID");
     if (!["active", "paused", "draft"].includes(status)) throw new Error("Invalid product status.");
-    const product = this.getProduct(productId);
-    if (!product || (product.merchant_id !== mid && !this.isSuperAdmin(mid))) throw new Error("Product not found.");
+    const { product } = this.assertProductManager(merchantId, productId);
     this.db.prepare("UPDATE products SET status = ?, updated_at = ? WHERE id = ?").run(status, nowIso(), product.id);
     return this.getProduct(product.id);
   }
 
   updateProductPrice(merchantId, productId, pricePiasters) {
-    const mid = safeTelegramId(merchantId, "Merchant ID");
-    const product = this.getProduct(productId);
-    if (!product || (product.merchant_id !== mid && !this.isSuperAdmin(mid))) throw new Error("Product not found.");
+    const { product } = this.assertProductManager(merchantId, productId);
     const price = assertPositivePiasters(pricePiasters, "Product price");
     this.db.prepare("UPDATE products SET price_piasters = ?, updated_at = ? WHERE id = ?").run(price, nowIso(), product.id);
     return this.getProduct(product.id);
   }
 
   addStock(merchantId, productId, items = []) {
-    const mid = safeTelegramId(merchantId, "Merchant ID");
-    const product = this.getProduct(productId);
-    if (!product || (product.merchant_id !== mid && !this.isSuperAdmin(mid))) throw new Error("Product not found.");
+    const { product } = this.assertProductManager(merchantId, productId);
     if (product.fulfillment_type !== "ready_stock") throw new Error("Only ready-stock products can receive stock.");
     const cleanItems = items.map((item) => cleanText(item, 4000)).filter(Boolean);
     if (!cleanItems.length) throw new Error("Send at least one stock item.");
@@ -487,22 +622,15 @@ class StoreService {
   }
 
   clearAvailableStock(merchantId, productId) {
-    const mid = safeTelegramId(merchantId, "Merchant ID");
-    const product = this.getProduct(productId);
-    if (!product || (product.merchant_id !== mid && !this.isSuperAdmin(mid))) throw new Error("Product not found.");
+    const { product } = this.assertProductManager(merchantId, productId);
     if (product.fulfillment_type !== "ready_stock") throw new Error("Only ready-stock products have stock.");
     return this.db.prepare("DELETE FROM stock_items WHERE product_id = ? AND status = 'available'").run(product.id).changes;
   }
 
   deleteProduct(merchantId, productId) {
-    const mid = safeTelegramId(merchantId, "Merchant ID");
-    const product = this.getProduct(productId);
-    if (!product || (product.merchant_id !== mid && !this.isSuperAdmin(mid))) throw new Error("Product not found.");
-    this.db.transaction(() => {
-      this.db.prepare("DELETE FROM stock_items WHERE product_id = ? AND status = 'available'").run(product.id);
-      this.db.prepare("DELETE FROM user_price_overrides WHERE product_id = ?").run(product.id);
-      this.db.prepare("DELETE FROM products WHERE id = ?").run(product.id);
-    })();
+    const { product } = this.assertProductManager(merchantId, productId);
+    this.db.prepare("UPDATE products SET status = 'archived', updated_at = ? WHERE id = ?").run(nowIso(), product.id);
+    return this.getProduct(product.id);
   }
 
   getUserPriceOverride(userId, productId) {
@@ -511,7 +639,7 @@ class StoreService {
   }
 
   setUserPriceOverride(adminId, userId, productId, pricePiasters, note = "") {
-    const admin = safeTelegramId(adminId, "Admin ID");
+    const admin = this.assertSuperAdmin(adminId);
     const user = safeTelegramId(userId, "User ID");
     const product = this.getProduct(productId);
     if (!product) throw new Error("Product not found.");
@@ -659,7 +787,7 @@ class StoreService {
   }
 
   deliverOrder(merchantId, orderId, deliveryText) {
-    const mid = safeTelegramId(merchantId, "Merchant ID");
+    const mid = this.assertActiveStaff(merchantId, "Merchant ID");
     const order = this.getOrder(orderId);
     if (!order || (order.merchant_id !== mid && !this.isSuperAdmin(mid))) throw new Error("Order not found.");
     if (order.status !== "awaiting_delivery") throw new Error("Order is not awaiting delivery.");
@@ -698,6 +826,7 @@ class StoreService {
 }
 
 module.exports = {
+  MANUAL_PAYMENT_METHODS,
   MAX_TOPUP_PIASTERS,
   MIN_TOPUP_PIASTERS,
   StoreService,

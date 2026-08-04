@@ -38,8 +38,30 @@ function parseMoneyToPiasters(value) {
   return Number(units) * 100 + Number(cents.padEnd(2, "0").slice(0, 2));
 }
 
+function isEnabled(value) {
+  return /^(1|true|yes|on)$/i.test(String(value || ""));
+}
+
+function manualPaymentConfig(method) {
+  const key = String(method || "").trim().toUpperCase();
+  if (!['WALLET', 'BINANCE'].includes(key)) return null;
+  const receiver = String(process.env[`MANUAL_${key}_RECEIVER`] || "").trim();
+  const instructions = String(process.env[`MANUAL_${key}_INSTRUCTIONS`] || "").trim();
+  if (!receiver) return null;
+  return {
+    method: key.toLowerCase(),
+    label: key === 'WALLET' ? 'المحفظة' : 'Binance',
+    receiver,
+    instructions,
+  };
+}
+
+function manualPaymentMethods() {
+  return ['wallet', 'binance'].map(manualPaymentConfig).filter(Boolean);
+}
+
 function topupsEnabled() {
-  return /^(1|true|yes|on)$/i.test(String(process.env.TOPUPS_ENABLED || process.env.CASHUP_ENABLED || ""));
+  return isEnabled(process.env.MANUAL_TOPUPS_ENABLED) && manualPaymentMethods().length > 0;
 }
 
 function isCommand(text, command) {
@@ -66,7 +88,7 @@ function escMd(text) {
 function staffStatus(store, superAdmins, userId) {
   const id = String(userId);
   return {
-    isSuperAdmin: superAdmins.has(id) || store.isSuperAdmin(id),
+    isSuperAdmin: store.isSuperAdmin(id),
     isMerchant: store.isActiveMerchant(id),
   };
 }
@@ -93,7 +115,9 @@ function adminKeyboard(isSuperAdmin = false) {
     [{ text: "⏳ الطلبات المعلقة", callback_data: "merchant:orders" }, { text: "📊 تقارير الأرباح", callback_data: "merchant:reports" }],
   ];
   if (isSuperAdmin) {
-    rows.push([{ text: "👤 إضافة تاجر/أدمن", callback_data: "admin:add_merchant" }, { text: "👥 جميع التجار", callback_data: "admin:merchants" }]);
+    rows.push([{ text: "👤 إضافة تاجر", callback_data: "admin:add_merchant" }, { text: "🛡️ إضافة أدمن", callback_data: "admin:add_admin" }]);
+    rows.push([{ text: "👥 جميع التجار", callback_data: "admin:merchants" }, { text: "🛡️ جميع الأدمنز", callback_data: "admin:admins" }]);
+    rows.push([{ text: "➖ إزالة تاجر", callback_data: "admin:remove_merchant" }, { text: "⛔ إزالة أدمن", callback_data: "admin:remove_admin" }]);
     rows.push([{ text: "💵 إضافة رصيد", callback_data: "admin:credit" }, { text: "🔄 تصفير رصيد", callback_data: "admin:zero" }]);
     rows.push([{ text: "👥 الأعضاء", callback_data: "admin:members" }, { text: "🌐 تقرير المنصة الشامل", callback_data: "admin:report" }]);
     rows.push([{ text: "🏷️ تحديد سعر خاص لزبون", callback_data: "admin:custom_price" }]);
@@ -147,17 +171,16 @@ function merchantProductKeyboard(product) {
   }
   rows.push([{ text: "✏️ تعديل السعر", callback_data: `merchant:edit_price:${product.id}` }]);
   rows.push([{ text: product.status === "active" ? "⏸️ إيقاف المنتج" : "▶️ تفعيل المنتج", callback_data: `merchant:toggle:${product.id}` }]);
-  rows.push([{ text: "🗑️ حذف المنتج نهائياً", callback_data: `merchant:delete:${product.id}` }]);
+  rows.push([{ text: "🗑️ أرشفة المنتج", callback_data: `merchant:delete:${product.id}` }]);
   rows.push([{ text: "👈 عودة لمنتجاتي", callback_data: "merchant:products" }]);
   return { inline_keyboard: rows };
 }
 
 function topupKeyboard() {
+  const methods = manualPaymentMethods();
   return {
     inline_keyboard: [
-      [{ text: `50 ${currencyCode()}`, callback_data: "topup:5000" }, { text: `100 ${currencyCode()}`, callback_data: "topup:10000" }],
-      [{ text: `250 ${currencyCode()}`, callback_data: "topup:25000" }, { text: `500 ${currencyCode()}`, callback_data: "topup:50000" }],
-      [{ text: "✏️ مبلغ مخصص", callback_data: "topup:custom" }],
+      ...methods.map((method) => [{ text: `💳 الدفع عبر ${method.label}`, callback_data: `manual_topup:${method.method}` }]),
       [{ text: "🏠 القائمة الرئيسية", callback_data: "main:home" }],
     ]
   };
@@ -207,7 +230,6 @@ async function safeEditOrSend(api, chatId, messageId, text, options = {}) {
 
 async function showHome(api, store, superAdmins, chatId, from, messageId = null) {
   const id = store.ensureUser(from);
-  if (superAdmins.has(id)) store.ensureSuperAdmin(id, { displayName: displayName(from), addedBy: id, status: "active" });
   const stf = staffStatus(store, superAdmins, id);
 
   // إرسال كيبورد القائمة الثابتة دائماً
@@ -283,7 +305,10 @@ async function showAdmin(api, store, superAdmins, chatId, userId, messageId = nu
 }
 
 async function notifyStaffAboutAssistedOrder(api, store, superAdmins, result) {
-  const recipients = new Set([String(result.order.merchant_id), ...[...superAdmins].map(String)]);
+  const recipients = new Set([
+    String(result.order.merchant_id),
+    ...store.listSuperAdmins().filter((admin) => admin.status === "active").map((admin) => String(admin.telegram_id)),
+  ]);
   const text = panel("🚨 طلب جديد يحتاج تسليم (Assisted Order)", [
     `رقم الطلب: #${result.order.id}`,
     `المنتج: ${result.product.title}`,
@@ -336,47 +361,83 @@ async function handlePurchaseResult(api, store, superAdmins, chatId, userId, res
   ]), { reply_markup: homeKeyboard(false) });
 }
 
-async function startTopup(api, store, chatId, userId, amountPiasters) {
-  try {
-    const topup = await store.createTopup(userId, amountPiasters);
-    store.setState(userId, "topup_sender", { topupId: topup.id });
-    await api.sendMessage(chatId, panel("💳 شحن المحفظة أوتوماتيكياً", [
-      `المبلغ المطلوب: ${escMd(formatMoney(topup.amount_piasters))}`,
-      topup.receiver_number ? `الرقم المطلوب التحويل عليه: \`${escMd(topup.receiver_number)}\`` : "",
-      topup.instructions || "يرجى اتباع تعليمات التحويل.",
-      "",
-      "📌 بعد التحويل، أرسل اسمك المسجل في InstaPay أو رقم محفظتك هنا للتأكيد.",
-    ]), { parse_mode: "Markdown", reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] } });
-  } catch (error) {
-    await api.sendMessage(chatId, panel("⚠️ الشحن التلقائي غير متاح حالياً", [
-      error.message || "تواصل مع المالك لشحن رصيدك يدوياً.",
-    ]), { reply_markup: homeKeyboard(false) });
+async function startManualTopup(api, store, chatId, userId, paymentMethod, amountPiasters) {
+  const config = manualPaymentConfig(paymentMethod);
+  if (!topupsEnabled() || !config) throw new Error("طريقة الدفع المختارة غير متاحة حالياً.");
+  const topup = store.createManualTopup(userId, config.method, amountPiasters);
+  store.setState(userId, "manual_topup_proof", { topupId: topup.id });
+  await api.sendMessage(chatId, panel(`💳 شحن يدوي عبر ${config.label}`, [
+    `المبلغ المطلوب: ${formatMoney(topup.amount_piasters)}`,
+    `أرسل التحويل إلى: ${config.receiver}`,
+    config.instructions || "أدخل بيانات التحويل الصحيحة ثم احتفظ بالإيصال.",
+    "",
+    "بعد التحويل أرسل سكرين شوت أو ملف الإيصال هنا. سيصل تلقائياً إلى الأدمن للمراجعة، ثم يضاف الرصيد يدوياً بعد الاعتماد.",
+  ]), { reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] } });
+}
+
+function receiptFromMessage(message = {}) {
+  if (Array.isArray(message.photo) && message.photo.length) {
+    return { kind: "photo", fileId: message.photo[message.photo.length - 1].file_id };
   }
+  if (message.document?.file_id) return { kind: "document", fileId: message.document.file_id };
+  return null;
+}
+
+async function notifyAdminsAboutManualTopup(api, store, topup) {
+  const admins = store.listSuperAdmins().filter((admin) => admin.status === "active");
+  const caption = panel("🧾 إثبات شحن يدوي جديد", [
+    `رقم الطلب: #${topup.id}`,
+    `العميل: ${topup.user_id}`,
+    `الطريقة: ${topup.payment_method === "wallet" ? "المحفظة" : "Binance"}`,
+    `المبلغ المطلوب: ${formatMoney(topup.amount_piasters)}`,
+    "راجع قيمة التحويل والإثبات قبل الاعتماد.",
+  ]);
+  const options = {
+    caption,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "✅ اعتماد وإضافة الرصيد", callback_data: `admin:approve_manual_topup:${topup.id}` }],
+        [{ text: "❌ رفض مع سبب", callback_data: `admin:reject_manual_topup:${topup.id}` }],
+      ],
+    },
+  };
+  await Promise.allSettled(admins.map((admin) => (
+    topup.proof_kind === "photo"
+      ? api.sendPhoto(admin.telegram_id, topup.proof_file_id, options)
+      : api.sendDocument(admin.telegram_id, topup.proof_file_id, options)
+  )));
+}
+
+async function handleManualTopupReceipt(api, store, chatId, userId, state, message) {
+  if (state.state !== "manual_topup_proof") return false;
+  const receipt = receiptFromMessage(message);
+  if (!receipt) {
+    await api.sendMessage(chatId, "📎 أرسل سكرين شوت أو ملف الإيصال فقط، أو استخدم /cancel للإلغاء.");
+    return true;
+  }
+  const topup = store.submitManualTopupProof(userId, state.data.topupId, receipt);
+  store.clearState(userId);
+  await notifyAdminsAboutManualTopup(api, store, topup);
+  await api.sendMessage(chatId, panel("✅ تم إرسال إثبات التحويل", [
+    `رقم الطلب: #${topup.id}`,
+    "سيقوم الأدمن بمراجعة الإيصال. ستصلك رسالة عند اعتماد أو رفض الطلب.",
+  ]), { reply_markup: homeKeyboard(false) });
+  return true;
 }
 
 async function handleStateMessage(api, store, superAdmins, chatId, from, state, text) {
   const userId = String(from.id);
   const stf = staffStatus(store, superAdmins, userId);
 
-  if (state.state === "topup_sender") {
-    const result = await store.validateTopup(userId, state.data.topupId, text);
-    if (!result.ok) {
-      await api.sendMessage(chatId, panel("❌ لم يتم العثور على التحويل بعد", [result.error || "يرجى التأكد من البيانات والمحاولة مرة أخرى."]), {
-        reply_markup: { inline_keyboard: [[{ text: "🔄 إعادة المحاولة", callback_data: `topup:retry:${state.data.topupId}` }], [{ text: "🏠 الرئيسية", callback_data: "main:home" }]] },
-      });
-      return;
-    }
+  if (state.state === "manual_topup_amount") {
+    const amount = parseMoneyToPiasters(text);
     store.clearState(userId);
-    await api.sendMessage(chatId, panel("🎉 تم شحن المحفظة بنجاح!", [
-      `رصيدك الجديد: ${formatMoney(result.balance)}`,
-    ]), { reply_markup: homeKeyboard(false) });
+    await startManualTopup(api, store, chatId, userId, state.data.paymentMethod, amount);
     return;
   }
 
-  if (state.state === "topup_custom") {
-    const amount = parseMoneyToPiasters(text);
-    store.clearState(userId);
-    await startTopup(api, store, chatId, userId, amount);
+  if (state.state === "manual_topup_proof") {
+    await api.sendMessage(chatId, "📎 أرسل سكرين شوت أو ملف الإيصال فقط، أو استخدم /cancel للإلغاء.");
     return;
   }
 
@@ -464,10 +525,48 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
   if (state.state === "admin_add_merchant") {
     const [targetId, ...nameParts] = String(text || "").trim().split(/\s+/);
     const name = nameParts.join(" ") || `تاجر ${targetId}`;
-    store.ensureUser({ id: targetId, first_name: name });
-    store.ensureMerchant(targetId, { displayName: name, addedBy: userId, status: "active" });
+    const merchant = store.addMerchant(userId, targetId, { displayName: name });
     store.clearState(userId);
-    await api.sendMessage(chatId, panel("👤 تم إضافة التاجر/الأدمن", [`ID: ${targetId}`, `الاسم: ${name}`]), { reply_markup: adminKeyboard(true) });
+    await api.sendMessage(chatId, panel("👤 تم إضافة التاجر", [`ID: ${merchant.telegram_id}`, `الاسم: ${merchant.display_name || name}`]), { reply_markup: adminKeyboard(true) });
+    return;
+  }
+
+  if (state.state === "admin_add_admin") {
+    const [targetId, ...nameParts] = String(text || "").trim().split(/\s+/);
+    const name = nameParts.join(" ") || `أدمن ${targetId}`;
+    const admin = store.addSuperAdmin(userId, targetId, { displayName: name });
+    store.clearState(userId);
+    await api.sendMessage(chatId, panel("🛡️ تم إضافة الأدمن", [`ID: ${admin.telegram_id}`, `الاسم: ${admin.display_name || name}`]), { reply_markup: adminKeyboard(true) });
+    return;
+  }
+
+  if (state.state === "admin_remove_merchant") {
+    const targetId = store.resolveUserId(text);
+    if (!targetId) throw new Error("⚠️ لم يتم العثور على التاجر.");
+    store.deactivateMerchant(userId, targetId);
+    store.clearState(userId);
+    await api.sendMessage(chatId, panel("➖ تم إيقاف التاجر", [`ID: ${targetId}`, "تم إيقاف منتجاته النشطة وحفظ السجل السابق."]), { reply_markup: adminKeyboard(true) });
+    return;
+  }
+
+  if (state.state === "admin_remove_admin") {
+    const targetId = store.resolveUserId(text);
+    if (!targetId) throw new Error("⚠️ لم يتم العثور على الأدمن.");
+    store.deactivateSuperAdmin(userId, targetId);
+    store.clearState(userId);
+    await api.sendMessage(chatId, panel("⛔ تم إيقاف الأدمن", [`ID: ${targetId}`, "تم تعطيل صلاحياته وإيقاف منتجاته النشطة مع حفظ السجل السابق."]), { reply_markup: adminKeyboard(true) });
+    return;
+  }
+
+  if (state.state === "admin_reject_manual_topup") {
+    const topup = store.rejectManualTopup(userId, state.data.topupId, text);
+    store.clearState(userId);
+    await api.sendMessage(topup.user_id, panel("❌ تم رفض إثبات الشحن", [
+      `رقم الطلب: #${topup.id}`,
+      `السبب: ${topup.reviewer_note}`,
+      "يمكنك بدء طلب شحن جديد بعد مراجعة بيانات التحويل.",
+    ]), { reply_markup: homeKeyboard(false) }).catch(() => { });
+    await api.sendMessage(chatId, panel("❌ تم رفض طلب الشحن", [`رقم الطلب: #${topup.id}`]), { reply_markup: adminKeyboard(true) });
     return;
   }
 
@@ -520,9 +619,18 @@ async function handleMessage(api, store, superAdmins, message) {
   const from = message.from || {};
   if (!chatId || !from.id) return;
   const userId = store.ensureUser(from);
-  if (superAdmins.has(userId)) store.ensureSuperAdmin(userId, { displayName: displayName(from), addedBy: userId, status: "active" });
-
   const text = String(message.text || "").trim();
+  const pendingState = store.getState(userId);
+
+  if (pendingState && (message.photo || message.document)) {
+    try {
+      const handled = await handleManualTopupReceipt(api, store, chatId, userId, pendingState, message);
+      if (handled) return;
+    } catch (error) {
+      await api.sendMessage(chatId, error.message || "⚠️ حدث خطأ ما.", { reply_markup: homeKeyboard(false) });
+      return;
+    }
+  }
 
   // التعامل مع الأزرار الثابتة بالأسفل (Reply Keyboards)
   if (text === "🛒 المنتجات") { store.clearState(userId); await showShop(api, store, chatId); return; }
@@ -533,9 +641,9 @@ async function handleMessage(api, store, superAdmins, message) {
   if (text === "💳 شحن الرصيد") {
     store.clearState(userId);
     if (topupsEnabled()) {
-      await api.sendMessage(chatId, panel("💳 شحن المحفظة", ["اختر المبلغ الذي تريد شحنه:"]), { reply_markup: topupKeyboard() });
+      await api.sendMessage(chatId, panel("💳 شحن المحفظة", ["اختر وسيلة الدفع، ثم أدخل المبلغ وأرسل إثبات التحويل."]), { reply_markup: topupKeyboard() });
     } else {
-      await api.sendMessage(chatId, panel("⚠️ الشحن التلقائي غير متاح", ["تواصل مع الأدمن للشحن اليدوي."]));
+      await api.sendMessage(chatId, panel("⚠️ الشحن اليدوي غير متاح", ["تواصل مع الأدمن لإضافة الرصيد يدوياً."]));
     }
     return;
   }
@@ -558,7 +666,7 @@ async function handleMessage(api, store, superAdmins, message) {
       "💰 المحفظة — عرض رصيدك وآخر العمليات",
       "📦 طلباتي — سجل مشترياتك وحالة الطلبات",
       "👤 حسابي — بياناتك الشخصية",
-      topupsEnabled() ? "💳 شحن الرصيد — شحن محفظتك إلكترونياً" : "",
+      topupsEnabled() ? "💳 شحن الرصيد — تحويل يدوي عبر محفظة أو Binance مع إرسال الإيصال" : "",
       "",
       "الأوامر المتاحة:",
       "/start — القائمة الرئيسية",
@@ -576,7 +684,7 @@ async function handleMessage(api, store, superAdmins, message) {
     return;
   }
 
-  const state = store.getState(userId);
+  const state = pendingState;
   if (state) {
     try {
       const handled = await handleStateMessage(api, store, superAdmins, chatId, from, state, text);
@@ -618,30 +726,22 @@ async function handleCallback(api, store, superAdmins, query) {
 
   if (data === "main:topup") {
     if (!topupsEnabled()) {
-      await safeEditOrSend(api, chatId, messageId, panel("⚠️ الشحن التلقائي معطل", ["تواصل مع الأدمن للشحن اليدوي."]), { reply_markup: homeKeyboard(false) });
+      await safeEditOrSend(api, chatId, messageId, panel("⚠️ الشحن اليدوي غير متاح", ["تواصل مع الأدمن لإضافة الرصيد يدوياً."]), { reply_markup: homeKeyboard(false) });
       return;
     }
-    await safeEditOrSend(api, chatId, messageId, panel("💳 شحن المحفظة", ["اختر المبلغ المطلوبة:"]), { reply_markup: topupKeyboard() });
+    await safeEditOrSend(api, chatId, messageId, panel("💳 شحن المحفظة", ["اختر وسيلة الدفع، ثم أدخل المبلغ وأرسل إثبات التحويل."]), { reply_markup: topupKeyboard() });
     return;
   }
 
-  if (data.startsWith("topup:retry:")) {
-    if (!topupsEnabled()) return;
-    const topupId = Number(data.split(":")[2]);
-    store.setState(userId, "topup_sender", { topupId });
-    await safeEditOrSend(api, chatId, messageId, "📌 أرسل اسمك المسجل في InstaPay أو رقم محفظتك هنا للتأكيد مرة أخرى:", { reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] } });
-    return;
-  }
-
-  if (data.startsWith("topup:")) {
-    if (!topupsEnabled()) return;
-    const value = data.split(":")[1];
-    if (value === "custom") {
-      store.setState(userId, "topup_custom", {});
-      await safeEditOrSend(api, chatId, messageId, "✏️ أرسل المبلغ المطلوب شحنه بالجنيه (مثال: 50 أو 100):", { reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] } });
+  if (data.startsWith("manual_topup:")) {
+    const paymentMethod = data.split(":")[1];
+    const config = manualPaymentConfig(paymentMethod);
+    if (!topupsEnabled() || !config) {
+      await safeEditOrSend(api, chatId, messageId, "⚠️ طريقة الدفع المختارة غير متاحة حالياً.", { reply_markup: homeKeyboard(false) });
       return;
     }
-    await startTopup(api, store, chatId, userId, Number(value));
+    store.setState(userId, "manual_topup_amount", { paymentMethod: config.method });
+    await safeEditOrSend(api, chatId, messageId, `✏️ أرسل مبلغ الشحن عبر ${config.label} بـ ${currencyCode()} (مثال: 50 أو 100):`, { reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] } });
     return;
   }
 
@@ -770,6 +870,10 @@ async function handleCallback(api, store, superAdmins, query) {
 
   if (data.startsWith("merchant:toggle:")) {
     const product = store.getProduct(Number(data.split(":")[2]));
+    if (!product || (product.merchant_id !== userId && !stf.isSuperAdmin)) {
+      await safeEditOrSend(api, chatId, messageId, "⚠️ المنتج غير موجود.", { reply_markup: adminKeyboard(stf.isSuperAdmin) });
+      return;
+    }
     const next = product.status === "active" ? "paused" : "active";
     store.setProductStatus(userId, product.id, next);
     await safeEditOrSend(api, chatId, messageId, panel("🔄 تم تغيير حالة المنتج", [`المنتج الآن: ${next === "active" ? "🟢 نشط ومعروض" : "🔴 موقوف"}`]), { reply_markup: adminKeyboard(stf.isSuperAdmin) });
@@ -783,15 +887,15 @@ async function handleCallback(api, store, superAdmins, query) {
       await safeEditOrSend(api, chatId, messageId, "⚠️ المنتج غير موجود.", { reply_markup: adminKeyboard(stf.isSuperAdmin) });
       return;
     }
-    await safeEditOrSend(api, chatId, messageId, panel("⚠️ تأكيد حذف المنتج", [
+    await safeEditOrSend(api, chatId, messageId, panel("⚠️ تأكيد أرشفة المنتج", [
       `المنتج: #${product.id} ${product.title}`,
       `السعر: ${formatMoney(product.price_piasters)}`,
       "",
-      "هل أنت متأكد من حذف هذا المنتج نهائياً؟",
+      "هل أنت متأكد من إيقاف وإخفاء هذا المنتج؟ سيتم الاحتفاظ بالطلبات والسجل.",
     ]), {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "🗑️ نعم، حذف نهائياً", callback_data: `merchant:confirm_delete:${productId}` }],
+          [{ text: "🗑️ نعم، أرشفة المنتج", callback_data: `merchant:confirm_delete:${productId}` }],
           [{ text: "❌ لا، رجوع", callback_data: `merchant:product:${productId}` }],
         ]
       }
@@ -801,8 +905,8 @@ async function handleCallback(api, store, superAdmins, query) {
 
   if (data.startsWith("merchant:confirm_delete:")) {
     const productId = Number(data.split(":")[2]);
-    store.deleteProduct(userId, productId);
-    await safeEditOrSend(api, chatId, messageId, panel("🗑️ تم حذف المنتج", ["تم حذف المنتج نهائياً من المتجر."]), { reply_markup: adminKeyboard(stf.isSuperAdmin) });
+    const product = store.deleteProduct(userId, productId);
+    await safeEditOrSend(api, chatId, messageId, panel("🗑️ تم أرشفة المنتج", [`المنتج #${product.id} لم يعد معروضاً للبيع، مع الاحتفاظ بالطلبات والسجل.`]), { reply_markup: adminKeyboard(stf.isSuperAdmin) });
     return;
   }
 
@@ -844,6 +948,52 @@ async function handleCallback(api, store, superAdmins, query) {
   if (data === "admin:add_merchant") {
     store.setState(userId, "admin_add_merchant", {});
     await safeEditOrSend(api, chatId, messageId, "👤 أرسل رقم ID التاجر واسمه (مثال: 123456789 أحمد التاجر):", { reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] } });
+    return;
+  }
+
+  if (data === "admin:add_admin") {
+    store.setState(userId, "admin_add_admin", {});
+    await safeEditOrSend(api, chatId, messageId, "🛡️ أرسل رقم ID الأدمن واسمه (مثال: 123456789 أحمد الأدمن):", { reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] } });
+    return;
+  }
+
+  if (data === "admin:remove_merchant") {
+    store.setState(userId, "admin_remove_merchant", {});
+    await safeEditOrSend(api, chatId, messageId, "➖ أرسل رقم ID أو اسم المستخدم للتاجر الذي تريد إيقافه. سيتم إيقاف منتجاته النشطة مع حفظ جميع السجلات.", { reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] } });
+    return;
+  }
+
+  if (data === "admin:remove_admin") {
+    store.setState(userId, "admin_remove_admin", {});
+    await safeEditOrSend(api, chatId, messageId, "⛔ أرسل رقم ID أو اسم المستخدم للأدمن الذي تريد إيقافه. لا يمكن إزالة آخر أدمن نشط.", { reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] } });
+    return;
+  }
+
+  if (data.startsWith("admin:approve_manual_topup:")) {
+    const topupId = Number(data.split(":")[2]);
+    const result = store.approveManualTopup(userId, topupId);
+    if (!result.alreadyApproved) {
+      await api.sendMessage(result.topup.user_id, panel("🎉 تم اعتماد شحن الرصيد", [
+        `رقم الطلب: #${result.topup.id}`,
+        `المبلغ المضاف: ${formatMoney(result.topup.amount_piasters)}`,
+        `رصيدك الحالي: ${formatMoney(result.balance)}`,
+      ]), { reply_markup: homeKeyboard(false) }).catch(() => { });
+    }
+    await safeEditOrSend(api, chatId, messageId, panel("✅ تم اعتماد طلب الشحن", [
+      `رقم الطلب: #${result.topup.id}`,
+      `العميل: ${result.topup.user_id}`,
+      `الرصيد بعد الإضافة: ${formatMoney(result.balance)}`,
+      result.alreadyApproved ? "تم اعتماده مسبقاً؛ لم تتم إضافة الرصيد مرة أخرى." : "تمت إضافة الرصيد مرة واحدة بنجاح.",
+    ]), { reply_markup: adminKeyboard(true) });
+    return;
+  }
+
+  if (data.startsWith("admin:reject_manual_topup:")) {
+    const topupId = Number(data.split(":")[2]);
+    const topup = store.getManualTopup(topupId);
+    if (!topup || topup.status !== "proof_submitted") throw new Error("إثبات الشحن غير متاح للمراجعة.");
+    store.setState(userId, "admin_reject_manual_topup", { topupId: topup.id });
+    await safeEditOrSend(api, chatId, messageId, `❌ أرسل سبب رفض إثبات الشحن للطلب #${topup.id}:`, { reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] } });
     return;
   }
 
@@ -889,7 +1039,17 @@ async function handleCallback(api, store, superAdmins, query) {
     for (const merchant of merchants) {
       lines.push(`👤 ${merchant.display_name || merchant.telegram_id} • ${merchant.status === "active" ? "🟢 نشط" : "🔴 موقوف"} • منتجات: ${merchant.product_count || 0}`);
     }
-    await safeEditOrSend(api, chatId, messageId, panel("👥 قائمة التجار والمسؤولين", lines), { reply_markup: adminKeyboard(true) });
+    await safeEditOrSend(api, chatId, messageId, panel("👥 قائمة التجار", lines), { reply_markup: adminKeyboard(true) });
+    return;
+  }
+
+  if (data === "admin:admins") {
+    const admins = store.listSuperAdmins();
+    const lines = admins.length ? [] : ["لا يوجد أدمنز مسجلون."];
+    for (const admin of admins) {
+      lines.push(`🛡️ ${admin.display_name || admin.telegram_id} • ${admin.status === "active" ? "🟢 نشط" : "🔴 موقوف"} • ${admin.telegram_id}`);
+    }
+    await safeEditOrSend(api, chatId, messageId, panel("🛡️ قائمة الأدمنز", lines), { reply_markup: adminKeyboard(true) });
     return;
   }
 
@@ -920,6 +1080,7 @@ function enqueueUpdate(update, task) {
     if (queues.get(key) === next) queues.delete(key);
   });
   queues.set(key, next);
+  return next;
 }
 
 async function poll(api, store, superAdmins) {
@@ -938,9 +1099,10 @@ async function poll(api, store, superAdmins) {
   while (running) {
     try {
       const updates = await api.getUpdates(offset, timeout);
+      const pending = [];
       for (const update of updates) {
         offset = update.update_id + 1;
-        enqueueUpdate(update, async () => {
+        pending.push(enqueueUpdate(update, async () => {
           const uid = update.message?.from?.id || update.callback_query?.from?.id;
           try {
             if (update.message) await handleMessage(api, store, superAdmins, update.message);
@@ -950,16 +1112,17 @@ async function poll(api, store, superAdmins) {
             log.error("bot", error.message, { userId: uid });
             if (chatId) await api.sendMessage(chatId, error.message || "⚠️ حدث خطأ ما.").catch(() => { });
           }
-        });
+        }));
       }
+      await Promise.allSettled(pending);
     } catch (error) {
       if (!running) break;
       log.error("poll", error.message);
       await sleep(2000);
     }
   }
+  await Promise.allSettled([...queues.values()]);
   log.info("bot", `${brandName()} stopped.`);
-  process.exit(0);
 }
 
 module.exports = {

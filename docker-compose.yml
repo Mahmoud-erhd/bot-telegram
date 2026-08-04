@@ -9,6 +9,8 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      M_AUTOMATION_DB_PATH: /data/store.db
     volumes:
       - bot_data:/data
 
